@@ -1,142 +1,120 @@
-# handlers/registration.py
 from aiogram import types, Dispatcher
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Command
 from aiogram.filters.state import StateFilter
+from aiogram.types import ReplyKeyboardMarkup
+from aiogram.utils.keyboard import ReplyKeyboardBuilder
 import db
 from config import ADMIN_USERNAMES
 
-# Определяем состояния FSM для регистрации
-class RegistrationState(StatesGroup):
-    choosing_role = State()             # выбор роли (журналист/спикер)
-    entering_email = State()            # ввод email
-    choosing_specializations = State()  # выбор специализаций (для спикера)
+def get_role_kb(role: str) -> ReplyKeyboardMarkup:
+    builder = ReplyKeyboardBuilder()
+    if role == "journalist":
+        builder.button(text="Новый запрос")
+        builder.button(text="Ответить на вопрос по запросу")
+        builder.button(text="Статус запросов")
+    elif role == "speaker":
+        builder.button(text="Ответить на запрос")       # speaker: answer
+        builder.button(text="Задать вопрос по запросу") # speaker: ask
+        builder.button(text="Статус запросов")          # speaker: status
+    elif role == "admin":
+        builder.button(text="/add_spec")
+        builder.button(text="/broadcast_journalists")
+        builder.button(text="/broadcast_speakers")
+        builder.button(text="/broadcast_all")
+        builder.button(text="/export")
+        builder.button(text="/status_all")
+    builder.adjust(2)
+    return builder.as_markup(resize_keyboard=True)
 
-# Обработчик команды /start – начало процесса регистрации
+class RegistrationState(StatesGroup):
+    choosing_role = State()
+    entering_email = State()
+    choosing_specializations = State()
+
 async def cmd_start(message: types.Message, state: FSMContext):
     user = await db.get_user_by_tg_id(message.from_user.id)
     if user:
-        # Если пользователь уже есть в базе, завершаем (не повторяем регистрацию)
         await state.clear()
-        await message.answer("Вы уже зарегистрированы. Используйте команды бота для дальнейшей работы.")
+        await message.answer(
+            "Вы уже зарегистрированы. Используйте команды бота.",
+            reply_markup=get_role_kb(user[4])
+        )
         return
-    # Пользователь новый – начинаем регистрацию
-    # Подготавливаем клавиатуру для выбора роли
-    buttons = [
-        [
-            types.KeyboardButton(text="Журналист"),
-            types.KeyboardButton(text="Спикер")
-        ]
-    ]
-    if message.from_user.username in ADMIN_USERNAMES:
-        buttons.append([types.KeyboardButton(text="Администратор")])
 
-    keyboard = types.ReplyKeyboardMarkup(
-        keyboard=buttons,
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
-    await message.answer("Добро пожаловать! Пожалуйста, выберите вашу роль:", reply_markup=keyboard)
-    # Устанавливаем состояние FSM для ожидания выбора роли
-    # await RegistrationState.choosing_role.set()
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="Журналист")
+    builder.button(text="Спикер")
+    builder.adjust(2)
+    if message.from_user.username in ADMIN_USERNAMES:
+        builder.button(text="Администратор")
+    kb = builder.as_markup(resize_keyboard=True)
+    await message.answer("Добро пожаловать! Выберите роль:", reply_markup=kb)
     await state.set_state(RegistrationState.choosing_role)
 
-# Обработчик выбора роли пользователем
 async def process_role(message: types.Message, state: FSMContext):
-    role_text = message.text.strip().lower()
+    text = message.text.strip().lower()
     role = None
-    if role_text == "журналист":
+    if text == "журналист":
         role = "journalist"
-    elif role_text == "спикер":
+    elif text == "спикер":
         role = "speaker"
-    elif role_text == "администратор":
-        # Проверяем, имеет ли пользователь право быть админом
-        if message.from_user.username in ADMIN_USERNAMES:
-            role = "admin"
-        else:
-            await message.answer("Вы не имеете права зарегистрироваться как администратор.")
-            # Остаёмся в состоянии выбора роли, позволяем выбрать снова
-            return
-    else:
-        # Неизвестный ввод
-        await message.answer("Пожалуйста, выберите роль, используя предложенную клавиатуру.")
+    elif text == "администратор" and message.from_user.username in ADMIN_USERNAMES:
+        role = "admin"
+    if not role:
+        await message.answer("Нужно выбрать из клавиатуры.")
         return
-    # Сохраняем выбранную роль во временные данные FSM
     await state.update_data(chosen_role=role)
-    # Запрашиваем email
-    await message.answer("Хорошо, теперь укажите ваш email для связи:")
-    await state.set_state(RegistrationState.entering_email)  # переходим к состоянию entering_email
+    await message.answer("Укажите ваш email:")
+    await state.set_state(RegistrationState.entering_email)
 
-# Обработчик ввода email
 async def process_email(message: types.Message, state: FSMContext):
     email = message.text.strip()
-    # Простейшая проверка формата email
     if "@" not in email or "." not in email:
-        await message.answer("Пожалуйста, введите корректный email.")
+        await message.answer("Неверный email, попробуйте ещё раз.")
         return
-    # Сохраняем email во временном состоянии
-    await state.update_data(email=email)
+
     data = await state.get_data()
-    role = data.get('chosen_role')
-    # Сохраняем пользователя в базе данных
-    # Если у пользователя нет username, используем его имя (first_name + last_name) для идентификации
-    user_name = message.from_user.username
-    if not user_name:
-        user_name = message.from_user.full_name or ""
-    await db.add_user(message.from_user.id, user_name, role, email)
-    user = await db.get_user_by_tg_id(message.from_user.id)
-    # Если пользователь – спикер, переходим к выбору специализаций
+    role = data['chosen_role']
+    username = message.from_user.username or message.from_user.full_name or ""
+    await db.add_user(message.from_user.id, username, role, email)
     if role == "speaker":
         specs = await db.list_specializations()
         if specs:
-            # Предоставляем список доступных специализаций
-            spec_names = ", ".join([s[1] for s in specs])
+            names = ", ".join([s[1] for s in specs])
             await message.answer(
-                f"Укажите ваши специализации через запятую из списка: {spec_names}\nЕсли ничего не подходит, введите 'нет'."
+                f"Выберите специализации через запятую из списка: {names}\n"
+                "Или напишите 'нет'."
             )
-        else:
-            await message.answer("Сейчас в системе нет доступных специализаций. Вы можете добавить их позже через администратора.")
-            # Завершаем регистрацию, если нет ни одной специализации
-            await state.clear()
+            await state.set_state(RegistrationState.choosing_specializations)
             return
-        await state.set_state(RegistrationState.choosing_specializations)  # состояние choosing_specializations
-    else:
-        # Если роль – журналист или админ, на этом регистрация заканчивается
-        await message.answer("Регистрация завершена! Вы можете начинать работу с ботом.")
-        await state.clear()
-
-# Обработчик выбора специализаций для спикера
-async def process_specializations(message: types.Message, state: FSMContext):
-    spec_input = message.text.strip()
-    data = await state.get_data()
-    user = await db.get_user_by_tg_id(message.from_user.id)
-    if not user:
-        await message.answer("Ошибка: пользователь не найден.")
-        await state.clear()
-        return
-    if spec_input.lower() in ('нет', 'не знаю', 'нечего'):
-        # Спикер указал, что специализаций нет или не подошли
-        await message.answer("Спасибо! Вы зарегистрированы как спикер без указанных специализаций.")
-        await state.clear()
-        return
-    # Разбираем введённые названия специализаций
-    spec_names = [name.strip() for name in spec_input.split(',') if name.strip()]
-    assigned_any = False
-    for name in spec_names:
-        spec = await db.get_specialization_by_name(name)
-        if spec:
-            # Привязываем специализацию к пользователю-спикеру
-            await db.assign_specialization_to_user(user[0], spec[0])
-            assigned_any = True
-    if assigned_any:
-        await message.answer("Ваши специализации сохранены. Регистрация завершена!")
-    else:
-        await message.answer("Не удалось сохранить специализации (возможно, указаны неверные названия). "
-                              "При необходимости обратитесь к администратору для добавления новых специализаций.")
+    await message.answer(
+        "Регистрация завершена!",
+        reply_markup=get_role_kb(role)
+    )
     await state.clear()
 
-# Функция для регистрации обработчиков данного модуля в диспетчере
+async def process_specializations(message: types.Message, state: FSMContext):
+    spec_input = message.text.strip().lower()
+    user = await db.get_user_by_tg_id(message.from_user.id)
+    if spec_input in ('нет', 'не знаю', 'нечего'):
+        await message.answer("Регистрация завершена!", reply_markup=get_role_kb("speaker"))
+        await state.clear()
+        return
+
+    names = [n.strip() for n in message.text.split(",")]
+    assigned = False
+    for nm in names:
+        spec = await db.get_specialization_by_name(nm)
+        if spec:
+            await db.assign_specialization_to_user(user[0], spec[0])
+            assigned = True
+
+    msg = "Специализации сохранены." if assigned else "Ничего не сохранено."
+    await message.answer(msg, reply_markup=get_role_kb("speaker"))
+    await state.clear()
+
 def register_handlers_registration(dp: Dispatcher):
     dp.message.register(cmd_start, Command("start"))
     dp.message.register(process_role, StateFilter(RegistrationState.choosing_role))

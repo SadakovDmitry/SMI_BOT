@@ -287,17 +287,33 @@ async def get_invites_for_request(request_id: int):
 
 # Получение всех запросов (приглашений) с участием данного спикера
 async def get_requests_for_speaker(speaker_id: int):
-    '''Get all request invites involving a particular speaker'''
+    """
+    Get all requests (invites) involving a particular speaker,
+    но только с теми статусами приглашения, где он действительно участвует.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT r.id, r.title, r.deadline, r.status, i.status, i.answer_text, i.answer_accepted, i.revision_requested "
-            "FROM request_invites i JOIN requests r ON i.request_id = r.id "
-            "WHERE i.speaker_id = ?;",
+            """
+            SELECT
+                r.id,
+                r.title,
+                r.deadline,
+                r.status       AS request_status,
+                i.status       AS invite_status,
+                i.answer_text,
+                i.answer_accepted,
+                i.revision_requested
+            FROM request_invites AS i
+            JOIN requests AS r ON i.request_id = r.id
+            WHERE i.speaker_id = ?
+              AND i.status NOT IN ('declined', 'cancelled')
+              AND r.status NOT IN ('open')
+            """,
             (speaker_id,)
         )
-        requests = await cursor.fetchall()
+        rows = await cursor.fetchall()
         await cursor.close()
-        return requests
+        return rows
 
 # Получение Telegram ID всех пользователей определённой роли (для рассылки)
 async def get_all_user_ids_by_role(role: str):
