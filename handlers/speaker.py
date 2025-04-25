@@ -183,6 +183,7 @@ async def cmd_answer_start(message: types.Message, state: FSMContext):
     await state.set_state(AnswerForm.waiting_request_id)
     await message.answer("Введите ID запроса, на который вы хотите ответить:", reply_markup=None)
 
+
 async def process_answer_id(message: types.Message, state: FSMContext):
     text = message.text.strip()
     if not text.isdigit():
@@ -197,6 +198,7 @@ async def process_answer_id(message: types.Message, state: FSMContext):
     await state.update_data(request_id=int(text))
     await state.set_state(AnswerForm.waiting_question)
     await message.answer("Теперь введите текст вашего сообщения:")
+
 
 async def process_answer_text(message: types.Message, state: FSMContext):
     data = await state.get_data()

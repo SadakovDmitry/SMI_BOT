@@ -19,12 +19,12 @@ def get_role_kb(role: str) -> ReplyKeyboardMarkup:
         builder.button(text="Задать вопрос по запросу") # speaker: ask
         builder.button(text="Статус запросов")          # speaker: status
     elif role == "admin":
-        builder.button(text="/add_spec")
-        builder.button(text="/broadcast_journalists")
-        builder.button(text="/broadcast_speakers")
-        builder.button(text="/broadcast_all")
-        builder.button(text="/export")
-        builder.button(text="/status_all")
+        builder.button(text="Добавить специализацию")
+        builder.button(text="Рассылка журналистам")
+        builder.button(text="Рассылка спикерам")
+        builder.button(text="Рассылка всем")
+        builder.button(text="Показать BD")
+        builder.button(text="Статусы всех запросов")
     builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 
