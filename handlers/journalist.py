@@ -385,12 +385,12 @@ async def process_reply_id(message: types.Message, state: FSMContext):
 
     await state.update_data(request_id=int(text))
     await state.set_state(ReplyForm.waiting_question)
-    await message.answer("Теперь введите текст вашего сообщения:")
+    await message.answer("Теперь введите текст вашего сообщения или прикрепите файл:")
 
 async def process_reply_text(message: types.Message, state: FSMContext):
     data = await state.get_data()
     req_id = data['request_id']
-    answer = message.text.strip()
+    # answer = message.text.strip()
     req = await db.get_request_by_id(req_id)
 
     sp_id = req[8]
@@ -398,7 +398,24 @@ async def process_reply_text(message: types.Message, state: FSMContext):
         await message.answer("Спикер ещё не выбран.")
         return await state.clear()
     sp = await db.get_user_by_id(sp_id)
-    await bot.send_message(sp[1], f"Ответ журналиста на запрос {req_id}:\n{answer}")
+
+    if message.document:
+        caption = f"✉️ Ответ журналиста на запрос {req_id}:\n"
+        if message.caption:
+            caption += message.caption
+        await bot.send_document(
+            sp[1],
+            document=message.document.file_id,
+            caption=caption
+        )
+    else:
+        # send plain text answer
+        text = message.text or ""
+        await bot.send_message(
+            sp[1],
+            f"✉️ Ответ журналиста на запрос {req_id}:\n{text}"
+        )
+    # await bot.send_message(sp[1], f"Ответ журналиста на запрос {req_id}:\n{answer}")
     await message.answer("Отправлено спикеру.")
     await state.clear()
 
