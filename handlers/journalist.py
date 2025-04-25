@@ -68,21 +68,29 @@ async def spec_chosen(callback: types.CallbackQuery, state: FSMContext):
     _, _, spec_id = callback.data.split('_')
     spec_id = int(spec_id)
     await state.update_data(spec_id=spec_id)
-    speakers = await db.get_speakers_by_specialization(spec_id)
-    if not speakers:
-        await callback.answer("Нет спикеров с этой специализацией.", show_alert=True)
-        return
-    # Формируем словарь спикеров {id: (tg_id, name)}
-    sp_map = {str(s[0]): (s[1], s[2] or s[3]) for s in speakers}
+
+    # 1) fetch both specialized and unspecialized speakers
+    spec_speakers   = await db.get_speakers_by_specialization(spec_id)
+    unspec_speakers = await db.get_speakers_without_specialization()
+    # merge, avoiding duplicates
+    all_speakers = {s[0]: s for s in spec_speakers}
+    for s in unspec_speakers:
+        all_speakers.setdefault(s[0], s)
+    sp_map = {str(uid): (tg, name or email)
+              for uid, tg, name, email in all_speakers.values()}
+
+    # 2) store for later
     await state.update_data(potential_speakers=sp_map, selected_speakers=[])
-    # Строим клавиатуру для выбора спикеров
-    # keyboard = types.InlineKeyboardMarkup(inline_keyboard=[])
-    builder = InlineKeyboardBuilder()
-    for uid, (tg, name) in sp_map.items():
-        builder.button(text=f"☐ {name}", callback_data=f"toggle_spk_{uid}")
-    builder.button(text="✅ Готово", callback_data="done_select")
-    keyboard = builder.as_markup()
-    await callback.message.edit_text("Выберите спикеров для запроса:", reply_markup=keyboard)
+
+    # 3) build the keyboard
+    kb = InlineKeyboardBuilder()
+    kb.button(text="☐ Выбрать всех", callback_data="toggle_spk_all")
+    for uid, (tg, nm) in sp_map.items():
+        kb.button(text=f"☐ {nm}", callback_data=f"toggle_spk_{uid}")
+    kb.button(text="✅ Готово", callback_data="done_select")
+    kb.adjust(2)
+
+    await callback.message.edit_text("Выберите спикеров для запроса:", reply_markup=kb.as_markup())
     await state.set_state(RequestForm.choosing_speakers)
     await callback.answer()
 
@@ -90,31 +98,57 @@ async def spec_chosen(callback: types.CallbackQuery, state: FSMContext):
 async def toggle_speaker(callback: types.CallbackQuery, state: FSMContext):
     _, _, uid = callback.data.split('_')
     data = await state.get_data()
-    selected = data['selected_speakers']
-    sp_map = data['potential_speakers']
-    if uid in selected:
-        selected.remove(uid)
+    selected = set(data['selected_speakers'])
+    sp_map   = data['potential_speakers']
+
+    if uid == "all":
+        # flip‐flop select all vs none
+        if "all" in selected:
+            selected.clear()
+        else:
+            selected = set(sp_map.keys()) | {"all"}
     else:
-        selected.append(uid)
-    await state.update_data(selected_speakers=selected)
-    # Обновляем кнопки
-    builder = InlineKeyboardBuilder()
-    for id_, (tg, name) in sp_map.items():
-        mark = '✅' if id_ in selected else '☐'
-        builder.button(text=f"{mark} {name}", callback_data=f"toggle_spk_{id_}")
-    builder.button(text="✅ Готово", callback_data="done_select")
-    keyboard = builder.as_markup()
-    await callback.message.edit_reply_markup(reply_markup=keyboard)
+        if uid in selected:
+            selected.remove(uid)
+            selected.discard("all")
+        else:
+            selected.add(uid)
+            # if every single speaker is now selected, mark "all" too
+            if set(sp_map.keys()) <= selected:
+                selected |= set(sp_map.keys()) | {"all"}
+
+    await state.update_data(selected_speakers=list(selected))
+
+    # rebuild KB to show checks
+    kb = InlineKeyboardBuilder()
+    kb.button(
+      text=("☑️" if "all" in selected else "☐") + " Выбрать всех",
+      callback_data="toggle_spk_all"
+    )
+    for sid, (tg, nm) in sp_map.items():
+        mark = "✅" if sid in selected else "☐"
+        kb.button(text=f"{mark} {nm}", callback_data=f"toggle_spk_{sid}")
+    kb.button(text="✅ Готово", callback_data="done_select")
+    kb.adjust(2)
+
+    await callback.message.edit_reply_markup(reply_markup=kb.as_markup())
     await callback.answer()
 
 
 async def done_selecting(callback: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
+    data     = await state.get_data()
     selected = data['selected_speakers']
+    sp_map   = data['potential_speakers']
+
     if not selected:
-        await callback.answer("Выберите хотя бы одного спикера.", show_alert=True)
-        return
-    chosen = [int(uid) for uid in selected]
+        return await callback.answer("Выберите хотя бы одного спикера.", show_alert=True)
+
+    # if they hit “all”, pick every real speaker
+    if "all" in selected:
+        chosen = [int(uid) for uid in sp_map.keys()]
+    else:
+        chosen = [int(uid) for uid in selected]
+
     await state.update_data(chosen_speaker_ids=chosen)
     await callback.message.edit_text("Спикеры выбраны.")
     await callback.message.answer("Введите тему запроса:")

@@ -147,6 +147,24 @@ async def get_speakers_by_specialization(spec_id: int):
         await cursor.close()
         return speakers
 
+# Получение всех спикеров, без специализации
+async def get_speakers_without_specialization():
+    """
+    Return all speakers who have no entry in user_specializations.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            """
+            SELECT u.id, u.tg_id, u.username, u.email
+              FROM users u
+             WHERE u.role = 'speaker'
+               AND u.id NOT IN (SELECT user_id FROM user_specializations)
+            """
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return rows
+
 # Создание нового запроса от журналиста и рассылка приглашений спикерам
 async def create_request(journalist_id: int, spec_id: int, title: str, deadline: str, fmt: str, content: str, speaker_ids: list):
     '''Create a new press request and invite selected speakers'''

@@ -17,16 +17,16 @@ class AnswerForm(StatesGroup):
     waiting_request_id = State()
     waiting_question = State()
 
-def get_role_kb() -> ReplyKeyboardMarkup:
-    builder = ReplyKeyboardBuilder()
-    # добавляем все кнопки в один список
-    builder.button(text="/answer")
-    builder.button(text="/ask")
-    builder.button(text="/status")
-    # раскладываем по 2 кнопки в ряд
-    builder.adjust(2)
-    # собираем разметку
-    return builder.as_markup(resize_keyboard=True)
+# def get_role_kb() -> ReplyKeyboardMarkup:
+#     builder = ReplyKeyboardBuilder()
+#     # добавляем все кнопки в один список
+#     builder.button(text="/answer")
+#     builder.button(text="/ask")
+#     builder.button(text="/status")
+#     # раскладываем по 2 кнопки в ряд
+#     builder.adjust(2)
+#     # собираем разметку
+#     return builder.as_markup(resize_keyboard=True)
 
 bot = None
 
@@ -96,8 +96,7 @@ async def handle_accept(callback: types.CallbackQuery):
 
     # 3) Уведомляем самого спикера, что он принял запрос (и показываем ID)
     await callback.message.answer(
-        f"Вы приняли запрос (ID {req_id}).",
-        reply_markup=get_role_kb()
+        f"Вы приняли запрос (ID {req_id})."
     )
 
     # 4) Убираем inline-кнопки из оригинального сообщения
@@ -127,8 +126,7 @@ async def handle_accept(callback: types.CallbackQuery):
 
     await bot.send_message(
         journalist[1],
-        f"Спикер @{(await db.get_user_by_id(speaker_id))[2]} принял ваш запрос (ID {req_id}).",
-        reply_markup=get_role_kb()
+        f"Спикер @{(await db.get_user_by_id(speaker_id))[2]} принял ваш запрос (ID {req_id})."
     )
 
     # 7) Завершаем callback, чтобы у кнопки пропало «часика» ожидания
