@@ -197,15 +197,16 @@ async def process_answer_id(message: types.Message, state: FSMContext):
 
     await state.update_data(request_id=int(text))
     await state.set_state(AnswerForm.waiting_question)
-    await message.answer("Теперь введите текст вашего сообщения:")
+    await message.answer("Теперь введите текст ответа и/или прикрепите файл:")
 
 
 async def process_answer_text(message: types.Message, state: FSMContext):
     data = await state.get_data()
     req_id = data['request_id']
-    answer = message.text.strip()
+    # answer = message.text.strip()
     user = await db.get_user_by_tg_id(message.from_user.id)
-    await db.record_answer(req_id, user[0], answer)
+    if message.text:
+        await db.record_answer(req_id, user[0], message.text)
     # Отправляем журналисту сообщение с кнопками
     req = await db.get_request_by_id(req_id)
     journ = await db.get_user_by_id(req[1])
@@ -213,7 +214,26 @@ async def process_answer_text(message: types.Message, state: FSMContext):
     builder.button(text="✅ Принять ответ", callback_data=f"ans_{req_id}_{user[0]}")
     builder.button(text="✏️ Запросить правки", callback_data=f"rev_{req_id}_{user[0]}")
     keyboard = builder.as_markup(resize_keyboard=True)
-    await bot.send_message(journ[1], f"Ответ по запросу {req_id}:\n{answer}", reply_markup=keyboard)
+    # await bot.send_message(journ[1], f"Ответ по запросу {req_id}:\n{answer}", reply_markup=keyboard)
+    if message.document:
+        caption = f"✉️ Ответ по запросу {req_id}:\n"
+        await db.record_answer(req_id, user[0], message.caption)
+        if message.caption:
+            caption += message.caption
+        await bot.send_document(
+            journ[1],
+            document=message.document.file_id,
+            caption=caption,
+            reply_markup=keyboard
+        )
+    else:
+        # send plain text answer
+        text = message.text or ""
+        await bot.send_message(
+            journ[1],
+            f"✉️ Ответ по запросу {req_id}:\n{text}",
+            reply_markup=keyboard
+        )
     await message.answer("Ответ отправлен журналисту.")
     await state.clear()
 
@@ -244,19 +264,35 @@ async def process_ask_id(message: types.Message, state: FSMContext):
 
     await state.update_data(request_id=int(text))
     await state.set_state(AskForm.waiting_question)
-    await message.answer("Теперь введите текст вашего сообщения:")
+    await message.answer("Теперь введите текст вашего вопроса и/или прикрепите файл:")
 
 async def process_ask_text(message: types.Message, state: FSMContext):
     data = await state.get_data()
     req_id = data['request_id']
-    question = message.text.strip()
+    # question = message.text.strip()
     # достаём журналиста и шлём ему
     req = await db.get_request_by_id(req_id)
     if not req:
         await message.answer("Запрос с таким ID не найден.")
         return await state.clear()
     journ = await db.get_user_by_id(req[1])
-    await bot.send_message(journ[1], f"❓ Вопрос по запросу {req_id}:\n{question}")
+    # await bot.send_message(journ[1], f"❓ Вопрос по запросу {req_id}:\n{question}")
+    if message.document:
+        caption = f"❓ Вопрос по запросу {req_id}:\n"
+        if message.caption:
+            caption += message.caption
+        await bot.send_document(
+            journ[1],
+            document=message.document.file_id,
+            caption=caption
+        )
+    else:
+        # plain text question
+        text = message.text or ""
+        await bot.send_message(
+            journ[1],
+            f"❓ Вопрос по запросу {req_id}:\n{text}"
+        )
     await message.answer("Вопрос отправлен журналисту.")
     await state.clear()
 
