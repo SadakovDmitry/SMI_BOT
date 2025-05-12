@@ -9,12 +9,14 @@ from aiogram.types import ReplyKeyboardMarkup
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 import db
 
+from handlers.registration import get_role_kb
+
 class AskForm(StatesGroup):
-    waiting_request_id = State()
+    selecting_request = State()
     waiting_question = State()
 
 class AnswerForm(StatesGroup):
-    waiting_request_id = State()
+    selecting_request = State()
     waiting_question = State()
 
 # def get_role_kb() -> ReplyKeyboardMarkup:
@@ -180,7 +182,7 @@ async def cmd_answer_start(message: types.Message, state: FSMContext):
     user = await db.get_user_by_tg_id(message.from_user.id)
     if not user or user[4] != 'speaker':
         return await message.answer("Только спикерам.")
-    await state.set_state(AnswerForm.waiting_request_id)
+    await state.set_state(AnswerForm.selecting_request)
     await message.answer("Введите ID запроса, на который вы хотите ответить:", reply_markup=None)
 
 
@@ -243,13 +245,41 @@ async def process_answer_text(message: types.Message, state: FSMContext):
 # ================================================================================================================
 
 
+# async def cmd_ask_start(message: types.Message, state: FSMContext):
+#     # Проверяем, что спикер
+#     user = await db.get_user_by_tg_id(message.from_user.id)
+#     if not user or user[4] != 'speaker':
+#         return await message.answer("Только спикерам.")
+#     await state.set_state(AskForm.selecting_request)
+#     await message.answer("Введите ID запроса, на который хотите задать вопрос:", reply_markup=None)
+
 async def cmd_ask_start(message: types.Message, state: FSMContext):
-    # Проверяем, что спикер
     user = await db.get_user_by_tg_id(message.from_user.id)
     if not user or user[4] != 'speaker':
         return await message.answer("Только спикерам.")
-    await state.set_state(AskForm.waiting_request_id)
-    await message.answer("Введите ID запроса, на который хотите задать вопрос:", reply_markup=None)
+    # Получаем список “в работе” запросов
+    invs = await db.get_requests_for_speaker(user[0])
+    if not invs:
+        return await message.answer("У вас нет активных запросов.")
+    # Строим клавиатуру
+    builder = InlineKeyboardBuilder()
+    for req_id, title, *_ in invs:
+        builder.button(text=title, callback_data=f"ask_req_{req_id}")
+    builder.adjust(2)
+    await message.answer("Выберите запрос, по которому хотите задать вопрос:", reply_markup=builder.as_markup())
+    await state.set_state(AskForm.selecting_request)
+
+async def on_ask_request_selected(callback: types.CallbackQuery, state: FSMContext):
+    _, _, req_id_str = callback.data.split('_')
+    req_id = int(req_id_str)
+    # Сохраняем в FSM
+    await state.update_data(request_id=req_id)
+    # Убираем кнопки
+    await callback.message.edit_reply_markup(reply_markup=None)
+    # Запрашиваем текст вопроса
+    await callback.message.answer("Теперь введите текст вашего вопроса и/или прикрепите файл:", reply_markup=get_role_kb("speaker"))
+    await state.set_state(AskForm.waiting_question)
+    await callback.answer()
 
 async def process_ask_id(message: types.Message, state: FSMContext):
     text = message.text.strip()
@@ -296,15 +326,6 @@ async def process_ask_text(message: types.Message, state: FSMContext):
     await message.answer("Вопрос отправлен журналисту.")
     await state.clear()
 
-# async def cmd_status(message: types.Message):
-#     user = await db.get_user_by_tg_id(message.from_user.id)
-#     if not user:
-#         return await message.answer("Не зарегистрированы.")
-#     text = "Ваши запросы:\n"
-#     for r in await db.get_requests_for_speaker(user[0]):
-#         text += f"ID {r[0]}: {r[1]} — {r[3]}\n"
-#     await message.answer(text)
-
 
 # ================================================================================================================
 #                                           HANDLERS
@@ -320,10 +341,12 @@ def register_handlers_speaker(dp: Dispatcher, bot_obj):
     dp.callback_query.register(handle_accept, lambda c: c.data.startswith('req_') and '_accept_' in c.data)
     dp.message.register(process_revision, StateFilter(RevisionState.waiting_comment))
     dp.message.register(cmd_ask_start, lambda c: c.text == 'Задать вопрос по запросу', StateFilter(None))
-    dp.message.register(process_ask_id, StateFilter(AskForm.waiting_request_id))
+    dp.callback_query.register(lambda c: c.data.startswith('ask_req_'), StateFilter(AskForm.selecting_request))
+    # dp.message.register(process_ask_id, StateFilter(AskForm.selecting_request))
+    dp.message.register(process_ask_id, StateFilter(AskForm.selecting_request))
     dp.message.register(process_ask_text, StateFilter(AskForm.waiting_question))
     dp.message.register(cmd_answer_start, lambda c: c.text == 'Ответить на запрос', StateFilter(None))
-    dp.message.register(process_answer_id, StateFilter(AnswerForm.waiting_request_id))
+    dp.message.register(process_answer_id, StateFilter(AnswerForm.selecting_request))
     dp.message.register(process_answer_text, StateFilter(AnswerForm.waiting_question))
     # dp.message.register(cmd_status, Text("Статус запросов"), StateFilter(None))
 
