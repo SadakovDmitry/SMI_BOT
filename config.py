@@ -1,5 +1,5 @@
 # config.py
-BOT_TOKEN = '8117726329:AAFwXNWQ687scAGvC0ZrZSXEfQ4APdcE76s'
+BOT_TOKEN = '8117726329:AAFFffWX5OZ47gwDjG0ZCIPtGEROKHFUIJc'
 ADMIN_USERNAMES = ['Dima920']  # Список Telegram-юзернеймов с правами администратора
 DB_PATH = 'database.sqlite3'
 
