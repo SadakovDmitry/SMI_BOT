@@ -38,6 +38,7 @@ async def send_email(to_email: str, subject: str, body: str):
 
 async def on_startup():
     # Создаем таблицы в SQLite
+    await bot.delete_webhook(drop_pending_updates=True)
     await db.create_tables()
 
     # Регистрируем хендлеры в новом API aiogram 3.x

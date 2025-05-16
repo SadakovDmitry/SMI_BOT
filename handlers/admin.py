@@ -12,8 +12,52 @@ import db
 import pandas as pd
 from io import BytesIO
 
+from handlers.registration import get_role_kb
+
 bot = None
 send_email = None
+
+# ================================================================================================================
+#  FSM для «Подтвердить пользователя»
+# ================================================================================================================
+
+class RegRejectForm(StatesGroup):
+    waiting_comment = State()
+
+async def on_confirm_registration(callback: types.CallbackQuery):
+    tg_id = int(callback.data.split("_",2)[2])
+    # активируем пользователя
+    await db.activate_user(tg_id)
+    # уведомляем его
+    user = await db.get_user_by_tg_id(tg_id)
+    await callback.bot.send_message(
+        tg_id,
+        "Ваша регистрация подтверждена! Сейчас вы можете пользоваться ботом.",
+        reply_markup=get_role_kb(user[5])
+    )
+    await callback.answer("Пользователь активирован.")
+    # убираем кнопки
+    await callback.message.edit_reply_markup(reply_markup=None)
+
+async def on_reject_registration(callback: types.CallbackQuery, state: FSMContext):
+    tg_id = int(callback.data.split("_",2)[2])
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await state.update_data(reject_tg_id=tg_id)
+    await callback.message.answer("Напишите, что нужно исправить в регистрации:", reply_markup=ReplyKeyboardRemove())
+    await state.set_state(RegRejectForm.waiting_comment)
+    await callback.answer()
+
+async def process_rejection_comment(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    tg_id = data['reject_tg_id']
+    comment = message.text.strip()
+    await message.bot.send_message(
+        tg_id,
+        f"Ваша регистрация отклонена: {comment}\n"
+        "Пожалуйста, пройдите регистрацию заново: /start"
+    )
+    await message.answer("Комментарий отправлен пользователю.")
+    await state.clear()
 
 # ================================================================================================================
 #  FSM для «Добавить специализацию»
@@ -124,7 +168,19 @@ async def cmd_export(message: types.Message):
     users = await db.get_all_users()
     requests = await db.get_all_requests()
 
-    df_u = pd.DataFrame(users, columns=['id','username','email','role'])
+    df_u = pd.DataFrame(
+        users,
+        columns=[
+            'id',
+            'tg_id',
+            'username',
+            'display_name',
+            'email',
+            'role',
+            'tariff',
+            'is_active'
+        ]
+    )
     buf1 = BytesIO()
     df_u.to_excel(buf1, index=False, engine='openpyxl'); buf1.seek(0)
     file1 = BufferedInputFile(buf1.getvalue(), filename='users.xlsx')
@@ -175,3 +231,8 @@ def register_handlers_admin(dp: Dispatcher, bot_obj, email_func):
     # — FSM для ввода текста —
     dp.message.register(process_add_spec,  StateFilter(AddSpecState.waiting_name))
     dp.message.register(process_broadcast, StateFilter(BroadcastState.waiting_comment))
+
+    # — FSM для подтверждения пользователя —
+    dp.callback_query.register(on_confirm_registration, lambda c: c.data.startswith('reg_confirm_'))
+    dp.callback_query.register(on_reject_registration,  lambda c: c.data.startswith('reg_reject_'))
+    dp.message.register(process_rejection_comment, StateFilter(RegRejectForm.waiting_comment))

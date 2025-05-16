@@ -9,11 +9,11 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder
 import db
 
 class ReplyForm(StatesGroup):
-    waiting_request_id = State()
+    waiting_request = State()
     waiting_question = State()
 
 class NewRequestForm(StatesGroup):
-    waiting_request_id = State()
+    waiting_request = State()
     waiting_question = State()
 
 # def get_role_kb() -> ReplyKeyboardMarkup:
@@ -50,7 +50,7 @@ class RevisionState(StatesGroup):
 
 async def cmd_new_request(message: types.Message, state: FSMContext):
     user = await db.get_user_by_tg_id(message.from_user.id)
-    if not user or user[4] != 'journalist':
+    if not user or user[5] != 'journalist':
         return await message.answer("Только журналистам.")
     specs = await db.list_specializations()
     if not specs:
@@ -173,12 +173,10 @@ async def process_format(message: types.Message, state: FSMContext):
     await message.answer("Опишите детали запроса:")
     await state.set_state(RequestForm.entering_content)
 
-
 async def process_content(message: types.Message, state: FSMContext):
     content = message.text.strip()
     if not content:
-        await message.answer("Текст запроса не может быть пустым.")
-        return
+        return await message.answer("Текст запроса не может быть пустым.")
     data = await state.get_data()
     spec_id = data['spec_id']
     title = data['title']
@@ -187,25 +185,24 @@ async def process_content(message: types.Message, state: FSMContext):
     speakers = data['chosen_speaker_ids']
     journalist = await db.get_user_by_tg_id(message.from_user.id)
     req_id = await db.create_request(journalist[0], spec_id, title, deadline, fmt, content, speakers)
-    # Рассылаем спикерам
     spec = await db.get_specialization_by_id(spec_id)
     spec_name = spec[1]
     for sp_id in speakers:
-        user = await db.get_user_by_id(sp_id)
+        user = await db.get_user_by_id(journalist)
+        display = user[3]  # поле display_name
         text = (
-            f"🆕 Новый запрос ({spec_name})\n"
+            f"🆕 Новый запрос от {display} ({spec_name})\n"
             f"Тема: {title}\n"
             f"Дедлайн: {deadline}\n"
             f"Формат: {fmt}\n"
             f"{content}\n\n"
-            f"Принять /decline запрос"
         )
         builder = InlineKeyboardBuilder()
         builder.button(text="✅ Принять", callback_data=f"req_{req_id}_accept_{sp_id}")
         builder.button(text="❌ Отклонить", callback_data=f"req_{req_id}_decline_{sp_id}")
         keyboard = builder.as_markup()
         await bot.send_message(user[1], text, reply_markup=keyboard)
-    await message.answer(f"Запрос отправлен (ID запроса {req_id}). ")
+    await message.answer(f"Запрос отправлен (ID {req_id}).")
     await state.clear()
 
 
@@ -366,32 +363,49 @@ async def process_revision(message: types.Message, state: FSMContext):
 
 async def cmd_reply_start(message: types.Message, state: FSMContext):
     user = await db.get_user_by_tg_id(message.from_user.id)
-    if not user or user[4] != 'journalist':
-        return await message.answer("Только журналисты.")
-    await state.set_state(ReplyForm.waiting_request_id)
-    await message.answer("Введите ID запроса, на который хотите ответить:", reply_markup=None)
+    if not user or user[5] != 'journalist':
+        return await message.answer("Только журналистам.")
+    reqs = await db.get_requests_by_journalist(user[0])
+    if not reqs:
+        return await message.answer("У вас нет активных запросов.")
+    builder = InlineKeyboardBuilder()
+    for req in reqs:
+        builder.button(text=req[2], callback_data=f"reply_req_{req[0]}")
+    builder.adjust(2)
+    await message.answer("Выберите запрос, по которому хотите отправить ответ спикеру:", reply_markup=builder.as_markup())
+    await state.set_state(ReplyForm.waiting_request)
 
-
-async def process_reply_id(message: types.Message, state: FSMContext):
-    text = message.text.strip()
-    if not text.isdigit():
-        return await message.answer("Неверный формат ID. Введите число.")
-
-    me = await db.get_user_by_tg_id(message.from_user.id)
-    req = await db.get_request_by_id(int(text))
-    if not req or req[1] != me[0]:
-        await message.answer("Это не ваш запрос.")
-        return await state.clear()
-
-    await state.update_data(request_id=int(text))
+async def on_reply_request_selected(callback: types.CallbackQuery, state: FSMContext):
+    _, _, req_id_str = callback.data.split('_')
+    req_id = int(req_id_str)
+    await state.update_data(request_id=req_id)
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer("Теперь введите текст ответа:")
     await state.set_state(ReplyForm.waiting_question)
-    await message.answer("Теперь введите текст вашего сообщения или прикрепите файл:")
+    await callback.answer()
+
+
+# async def process_reply_id(message: types.Message, state: FSMContext):
+#     text = message.text.strip()
+#     if not text.isdigit():
+#         return await message.answer("Неверный формат ID. Введите число.")
+#
+#     me = await db.get_user_by_tg_id(message.from_user.id)
+#     req = await db.get_request_by_id(int(text))
+#     if not req or req[1] != me[0]:
+#         await message.answer("Это не ваш запрос.")
+#         return await state.clear()
+#
+#     await state.update_data(request_id=int(text))
+#     await state.set_state(ReplyForm.waiting_question)
+#     await message.answer("Теперь введите текст вашего сообщения или прикрепите файл:")
 
 async def process_reply_text(message: types.Message, state: FSMContext):
     data = await state.get_data()
     req_id = data['request_id']
     # answer = message.text.strip()
     req = await db.get_request_by_id(req_id)
+    title = await db.get_request_title(req_id)
 
     sp_id = req[8]
     if not sp_id:
@@ -400,7 +414,7 @@ async def process_reply_text(message: types.Message, state: FSMContext):
     sp = await db.get_user_by_id(sp_id)
 
     if message.document:
-        caption = f"✉️ Ответ журналиста на запрос {req_id}:\n"
+        caption = f"✉️ Ответ журналиста на запрос «{title}»:\n"
         if message.caption:
             caption += message.caption
         await bot.send_document(
@@ -413,7 +427,7 @@ async def process_reply_text(message: types.Message, state: FSMContext):
         text = message.text or ""
         await bot.send_message(
             sp[1],
-            f"✉️ Ответ журналиста на запрос {req_id}:\n{text}"
+            f"✉️ Ответ журналиста на запрос «{title}»:\n{text}"
         )
     # await bot.send_message(sp[1], f"Ответ журналиста на запрос {req_id}:\n{answer}")
     await message.answer("Отправлено спикеру.")
@@ -451,7 +465,7 @@ async def cmd_status(message: types.Message):
     user = await db.get_user_by_tg_id(message.from_user.id)
     if not user:
         return await message.answer("Вас нет в списке пользователей.")
-    role = user[4]
+    role = user[5]
     if role not in ('journalist', 'speaker'):
         return await message.answer("Только журналистам и спикерам.")
 
@@ -499,6 +513,7 @@ def register_handlers_journalist(dp: Dispatcher, bot_obj, email_func):
     dp.message.register(cmd_status, Command('status'), StateFilter(None))
     dp.message.register(cmd_status, lambda c: c.text == 'Статус запросов', StateFilter(None))
     dp.message.register(cmd_reply_start, lambda c: c.text == 'Ответить на вопрос по запросу', StateFilter(None))
-    dp.message.register(process_reply_id, StateFilter(ReplyForm.waiting_request_id))
+    dp.callback_query.register(on_reply_request_selected, lambda c: c.data.startswith("reply_req_"), StateFilter(ReplyForm.waiting_request))
+    # dp.message.register(process_reply_id, StateFilter(ReplyForm.waiting_request))
     dp.message.register(process_reply_text, StateFilter(ReplyForm.waiting_question))
     dp.message.register(cmd_new_request, lambda c: c.text == 'Новый запрос', StateFilter(None))

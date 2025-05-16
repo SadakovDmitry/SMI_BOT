@@ -4,32 +4,40 @@ from config import DB_PATH
 
 # Инициализация (создание) таблиц базы данных, если их нет
 async def create_tables():
-    '''Initialize database tables if they do not exist'''
+    '''Инициализация таблиц базы данных'''
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA foreign_keys = ON;")
-        # Таблица пользователей
-        await db.execute("""CREATE TABLE IF NOT EXISTS users (
+        # Таблица пользователей с полями display_name, tariff и флагом is_active
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tg_id INTEGER UNIQUE,
             username TEXT,
+            display_name TEXT,
             email TEXT,
-            role TEXT
-        );""")
-        # Таблица специализаций
-        await db.execute("""CREATE TABLE IF NOT EXISTS specializations (
+            role TEXT,
+            tariff TEXT,
+            is_active INTEGER DEFAULT 0
+        );
+        """)
+        # Остальные таблицы
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS specializations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT UNIQUE
-        );""")
-        # Таблица связей пользователь-специализация (многие-ко-многим)
-        await db.execute("""CREATE TABLE IF NOT EXISTS user_specializations (
+        );
+        """)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS user_specializations (
             user_id INTEGER,
             spec_id INTEGER,
             FOREIGN KEY(user_id) REFERENCES users(id),
             FOREIGN KEY(spec_id) REFERENCES specializations(id),
             PRIMARY KEY (user_id, spec_id)
-        );""")
-        # Таблица запросов от журналистов
-        await db.execute("""CREATE TABLE IF NOT EXISTS requests (
+        );
+        """)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             journalist_id INTEGER,
             spec_id INTEGER,
@@ -42,9 +50,10 @@ async def create_tables():
             FOREIGN KEY(journalist_id) REFERENCES users(id),
             FOREIGN KEY(spec_id) REFERENCES specializations(id),
             FOREIGN KEY(chosen_speaker_id) REFERENCES users(id)
-        );""")
-        # Таблица приглашений спикеров по запросам
-        await db.execute("""CREATE TABLE IF NOT EXISTS request_invites (
+        );
+        """)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS request_invites (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id INTEGER,
             speaker_id INTEGER,
@@ -54,37 +63,93 @@ async def create_tables():
             revision_requested INTEGER,
             FOREIGN KEY(request_id) REFERENCES requests(id),
             FOREIGN KEY(speaker_id) REFERENCES users(id)
-        );""")
+        );
+        """)
+        await db.commit()
+
+async def add_pending_user(tg_id: int, username: str, display_name: str, email: str, role: str, tariff: str):
+    """Добавляем пользователя как неактивного (ожидает одобрения)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT OR REPLACE INTO users
+              (tg_id, username, display_name, email, role, tariff, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, 0)
+        """, (tg_id, username, display_name, email, role, tariff))
+        await db.commit()
+
+async def approve_user(user_id: int):
+    """Подтверждаем пользователя по internal ID."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET is_active = 1 WHERE id = ?;", (user_id,))
+        await db.commit()
+
+async def activate_user(tg_id: int):
+    """Подтверждаем пользователя по tg_id."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET is_active = 1 WHERE tg_id = ?;", (tg_id,))
+        await db.commit()
+
+async def reject_user(user_id: int):
+    """Удаляем или помечаем отклонённого. Здесь — удаляем."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM users WHERE id = ?;", (user_id,))
+        await db.commit()
+
+async def update_user_tariff(tg_id: int, tariff: str):
+    """Обновляем выбранный тариф для пользователя."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET tariff = ? WHERE tg_id = ?;", (tariff, tg_id))
         await db.commit()
 
 # Добавление или обновление пользователя
-async def add_user(tg_id: int, username: str, role: str, email: str):
-    '''Add a new user (or update existing)'''
+async def add_user(tg_id: int,
+                   username: str,
+                   display_name: str,
+                   email: str,
+                   role: str,
+                   tariff: str = None,
+                   is_active: int = 0):
+    """Добавляет или обновляет пользователя сразу со всеми полями."""
     async with aiosqlite.connect(DB_PATH) as db:
-        # INSERT OR REPLACE для обновления данных при повторной регистрации с тем же tg_id
         await db.execute(
-            "INSERT OR REPLACE INTO users (tg_id, username, email, role) VALUES (?, ?, ?, ?);",
-            (tg_id, username, email, role)
+            """
+            INSERT OR REPLACE INTO users
+                (tg_id, username, display_name, email, role, tariff, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            (tg_id, username, display_name, email, role, tariff, is_active)
         )
         await db.commit()
 
 # Получение пользователя по Telegram ID
 async def get_user_by_tg_id(tg_id: int):
-    '''Fetch user info by Telegram ID'''
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("SELECT id, tg_id, username, email, role FROM users WHERE tg_id = ?;", (tg_id,))
+        cursor = await db.execute(
+            """
+            SELECT id, tg_id, username, display_name, email, role, tariff, is_active
+              FROM users
+             WHERE tg_id = ?;
+            """,
+            (tg_id,)
+        )
         user = await cursor.fetchone()
         await cursor.close()
-        return user
+        return user  # кортеж из 8 элементов
 
-# Получение пользователя по внутреннему ID (id в таблице users)
+# Получение пользователя по внутреннему ID — аналогично
 async def get_user_by_id(user_id: int):
-    '''Fetch user info by internal user ID'''
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("SELECT id, tg_id, username, email, role FROM users WHERE id = ?;", (user_id,))
+        cursor = await db.execute(
+            """
+            SELECT id, tg_id, username, display_name, email, role, tariff, is_active
+              FROM users
+             WHERE id = ?;
+            """,
+            (user_id,)
+        )
         user = await cursor.fetchone()
         await cursor.close()
-        return user
+        return user  # кортеж из 8 элементов
 
 # Получить все специализации (для списка в регистрационном хендлере)
 async def list_specializations():
@@ -195,6 +260,19 @@ async def get_request_by_id(request_id: int):
         req = await cursor.fetchone()
         await cursor.close()
         return req
+
+async def get_request_title(request_id: int) -> str:
+    """
+    Возвращает название (title) запроса по его ID.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT title FROM requests WHERE id = ?;",
+            (request_id,)
+        )
+        row = await cursor.fetchone()
+        await cursor.close()
+    return row[0] if row else ""
 
 # Получение конкретного приглашения спикера (по запросу и спикеру)
 async def get_invite(request_id: int, speaker_id: int):
@@ -344,9 +422,24 @@ async def get_all_user_ids_by_role(role: str):
 
 # Получение всех пользователей (для экспорта)
 async def get_all_users():
-    '''Get all user records (for export)'''
+    """
+    Возвращает все записи из users со всеми полями.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("SELECT id, username, email, role FROM users;")
+        cursor = await db.execute(
+            """
+            SELECT
+                id,
+                tg_id,
+                username,
+                display_name,
+                email,
+                role,
+                tariff,
+                is_active
+            FROM users;
+            """
+        )
         rows = await cursor.fetchall()
         await cursor.close()
         return rows
